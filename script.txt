@@ -63,7 +63,7 @@ const PAGE_MAPS = {
     "19,3":  63,  "19,7":  64,
     "22,3":  67,  "22,7":  68,
     "27,3":  6,   "27,7":  7,
-    "30,5":  11,  "30,9":  13,
+    "30,7":  11,  "30,9":  13,
     "33,1":  51,  "33,5":  52,  "33,9":  53,
     "38,4":  71,  "38,9":  72,
     "40,4":  74,  "40,9":  75,
@@ -1044,7 +1044,7 @@ function exportStudentPDF(e, pagesToExport) {
           sheet.getRange(8, 9).setValue(studentId);
           sheet.getRange(13, 3).setValue(colMap[8]  || "---");
           sheet.getRange(13, 7).setValue(colMap[9]  || "---");
-          sheet.getRange(30, 7).setValue(colMap[12] || "---");
+          sheet.getRange(30, 5).setValue(colMap[12] || "---");
         }
         for (const key in pageMap) {
           const parts = key.split(",");
