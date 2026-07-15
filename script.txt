@@ -1,0 +1,1556 @@
+// ============================================================
+// Google Apps Script — نسخة TEST
+// Sheet: Copy of Urban_Planning_Archive_System
+// ============================================================
+
+// 🔧 جلب الإعدادات والبيانات الحساسة ديناميكياً من Script Properties لحمايتها
+function getScriptConfig() {
+  const props = PropertiesService.getScriptProperties();
+  let sheetId = props.getProperty("SHEET_ID");
+  let templateId = props.getProperty("TEMPLATE_ID");
+  let secretKey = props.getProperty("SECRET_KEY");
+  let usersJson = props.getProperty("USERS_CONFIG");
+
+  // إذا لم تكن الإعدادات مهيأة مسبقاً، يتم تخزين القيم الافتراضية
+  if (!sheetId) {
+    sheetId = "1mnXxSisU8cVi9i-SM-zCZiiKdcNCNGBR9e84BvHn8U8";
+    templateId = "1iIG3N8Uq8t4Mu-VRZvB0ISBNoZK0Pmyt04Usr7WBVlc";
+    secretKey = "9522f619-48e5-42f2-8967-03406a3a7ff2";
+    usersJson = JSON.stringify({
+      "admin":  { password: "565656", role: "admin"  },
+      "editor": { password: "2026", role: "pg" }
+    });
+    props.setProperties({
+      "SHEET_ID": sheetId,
+      "TEMPLATE_ID": templateId,
+      "SECRET_KEY": secretKey,
+      "USERS_CONFIG": usersJson
+    });
+  }
+
+  return {
+    SHEET_ID: sheetId,
+    TEMPLATE_ID: templateId,
+    SECRET_KEY: secretKey,
+    USERS: JSON.parse(usersJson)
+  };
+}
+
+const CONFIG = getScriptConfig();
+const SHEET_ID    = CONFIG.SHEET_ID;
+const TEMPLATE_ID = CONFIG.TEMPLATE_ID;
+const SECRET_KEY  = CONFIG.SECRET_KEY;
+const USERS       = CONFIG.USERS;
+
+const SHEET_NAME  = "information";
+const PAGES_CV = ["page1", "page2", "page3"];
+const PAGE4_SHEET_NAME = "page4";
+const PAGE9_SHEET_NAME = "page9";
+const PAGE5_SHEET_NAME = "page5";
+const PAGE6_SHEET_NAME = "page6";
+const PAGE7_SHEET_NAME = "page7";
+
+function generateToken(username) {
+  const today = Utilities.formatDate(new Date(), "Asia/Baghdad", "yyyy-MM-dd");
+  const raw = SECRET_KEY + "|" + username + "|" + today;
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, raw);
+  return bytes.map(function(b){ return (b & 0xff).toString(16).padStart(2,'0'); }).join('');
+}
+
+function isValidToken(token) {
+  if (!token) return false;
+  for (var u in USERS) { if (generateToken(u) === token) return true; }
+  return false;
+}
+
+function getRoleFromToken(token) {
+  for (var u in USERS) { if (generateToken(u) === token) return USERS[u].role || "editor"; }
+  return "editor";
+}
+
+function getUserFromToken(token) {
+  for (var u in USERS) { if (generateToken(u) === token) return u; }
+  return "admin";
+}
+
+function handleLogin(payload) {
+  var username = (payload.username || "").trim();
+  var password = (payload.password || "").trim();
+  if (!username || !password) return { success: false, error: "يرجى إدخال اسم المستخدم وكلمة المرور" };
+  var user = USERS[username];
+  if (user && user.password === password) {
+    return { success: true, token: generateToken(username), username: username, role: user.role };
+  }
+  return { success: false, error: "اسم المستخدم أو كلمة المرور غير صحيحة" };
+}
+
+const PAGE_MAPS = {
+  "page1": {
+    "11,3":  3,   "11,9":  15,
+    "15,3":  10,  "15,7":  16,
+    "19,3":  63,  "19,7":  64,
+    "22,3":  67,  "22,7":  68,
+    "27,3":  6,   "27,7":  7,
+    "30,1":  11,  "30,9":  13,
+    "33,1":  51,  "33,5":  52,  "33,9":  53,
+    "38,4":  71,  "38,9":  72,
+    "40,4":  74,  "40,9":  75,
+    "45,3":  229, "45,8":  230,
+    "47,3":  235, "47,7":  236,
+    "49,3":  237, "49,8":  238,
+  },
+  "page2": {
+    "11,5":  134, "11,8":  135,
+    "13,5":  136, "13,9":  137,
+    "17,5":  139, "17,8":  140,
+    "19,5":  141, "19,9":  142,
+    "24,3":  144, "24,5":  145, "24,7":  146, "24,9":  147,
+    "28,3":  149, "28,5":  150, "28,7":  151, "28,9":  152,
+    "34,1":  101, "34,4":  102, "34,6":  105, "34,9":  106,
+    "37,1":  108, "37,4":  109, "37,6":  112, "37,9":  113,
+    "42,4":  117,
+    "50,4":  115, "50,9":  116,
+    "55,6":  153,
+    "57,4":  154, "57,9":  155,
+  },
+  "page3": {
+    "9,4":   124, "9,9":   125,
+    "13,4":  131, "13,9":  132,
+    "16,2":  156, "16,5":  163, "16,8":  170,
+    "21,4":  177, "21,9":  178,
+    "23,4":  179,
+    "26,1":  185, "26,4": 187, "26,6": 188, "26,8": 189, "26,10": 190,
+    "27,1":  191, "27,4": 193, "27,6": 194, "27,8": 195, "27,10": 196,
+    "28,1":  197, "28,4": 199, "28,6": 200, "28,8": 201, "28,10": 202,
+    "29,1":  203, "29,4": 205, "29,6": 206, "29,8": 207, "29,10": 208,
+    "30,1":  209, "30,4": 211, "30,6": 212, "30,8": 213, "30,10": 214,
+    "31,1":  215, "31,4": 217, "31,6": 218, "31,8": 219, "31,10": 220,
+    "32,1":  221, "32,4": 223, "32,6": 224, "32,8": 225, "32,10": 226,
+    "44,2":  242, "44,5": 243, "44,8": 244,
+    "46,5":  245,
+    "48,7":  246,
+  },
+  "page4": {}
+};
+
+function doGet(e) {
+  const token = (e && e.parameter && e.parameter.token) || "";
+  if (!isValidToken(token)) {
+    return json({ error: "غير مصرح — انتهت الجلسة أو يرجى تسجيل الدخول أولاً" });
+  }
+
+  const action = (e && e.parameter && e.parameter.action) || "";
+  if (action === "exportPDF") {
+    writeLog(getUserFromToken(token), "تصدير سيرة دراسية", e.parameter.studentId||"", "", "page1+2+3");
+    return exportStudentPDF(e, ["page1","page2","page3"]);
+  }
+  if (action === "exportPDF4") {
+    writeLog(getUserFromToken(token), "تصدير محضر ماجستير", e.parameter.studentId||"", "", "page4");
+    return exportStudentPDF(e, ["page4"]);
+  }
+  if (action === "exportPDF5") {
+    writeLog(getUserFromToken(token), "تصدير استمارة ماجستير", e.parameter.studentId||"", "", "page5");
+    return exportStudentPDF(e, ["page5"]);
+  }
+  if (action === "exportPDF6") {
+    writeLog(getUserFromToken(token), "تصدير محضر دكتوراه", e.parameter.studentId||"", "", "page6");
+    return exportStudentPDF(e, ["page6"]);
+  }
+  if (action === "exportPDF9") {
+    writeLog(getUserFromToken(token), "تصدير استمارة ملاحظات لجنة المناقشة", e.parameter.studentId||"", "", "page9");
+    return exportStudentPDF(e, ["page9"]);
+  }
+  if (action === "exportPDF7") {
+    writeLog(getUserFromToken(token), "تصدير استمارة دكتوراه", e.parameter.studentId||"", "", "page7");
+    return exportStudentPDF(e, ["page7"]);
+  }
+  if (action === "getArchive") {
+    try {
+      var archShA = SpreadsheetApp.openById(SHEET_ID).getSheetByName("archive");
+      if (!archShA) return json({ archive: [] });
+      var archDataA = archShA.getDataRange().getValues();
+      var archHdrsA = archDataA[0];
+      var archIdA   = archHdrsA.indexOf("رقم الطالب");
+      var archNmA   = archHdrsA.indexOf("الاسم الرباعي واللقب");
+      var resultA = [];
+      for (var iA = 1; iA < archDataA.length; iA++) {
+        var rowA = archDataA[iA];
+        resultA.push({
+          id:       (rowA[archIdA] || "").toString(),
+          name:     (rowA[archNmA] || "").toString(),
+          date:     (rowA[rowA.length - 2] || "").toString(),
+          by:       (rowA[rowA.length - 1] || "").toString(),
+          rowIndex: iA + 1
+        });
+      }
+      return json({ archive: resultA.reverse() });
+    } catch(exA) { return json({ archive: [], error: exA.toString() }); }
+  }
+
+  if (action === "restore") {
+    if (getRoleFromToken(token) !== "admin") return json({ error: "فقط المشرف (admin) يستطيع استعادة الطالب" });
+    const lock = LockService.getScriptLock();
+    let hasLock = false;
+    try {
+      lock.waitLock(15000);
+      hasLock = true;
+      var rowIdxR = parseInt(e.parameter.rowIndex || "0");
+      if (!rowIdxR) return json({ error: "rowIndex مطلوب" });
+      var archShR = SpreadsheetApp.openById(SHEET_ID).getSheetByName("archive");
+      var archRowR = archShR.getRange(rowIdxR, 1, 1, archShR.getLastColumn()).getValues()[0];
+      var mainShR = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+      var mainHdrsR = mainShR.getRange(1, 1, 1, mainShR.getLastColumn()).getValues()[0];
+      var restoreRow = archRowR.slice(0, mainHdrsR.length);
+      mainShR.appendRow(restoreRow);
+      archShR.deleteRow(rowIdxR);
+      SpreadsheetApp.flush();
+      writeLog(getUserFromToken(token), "استعادة طالب", restoreRow[0]||"", restoreRow[1]||"", "استعيد من الارشيف");
+      return json({ status: "restored" });
+    } catch(exR) {
+      return json({ error: exR.toString() });
+    } finally {
+      if (hasLock) {
+        try { lock.releaseLock(); } catch(e) {}
+      }
+    }
+  }
+
+  if (action === "getDashboard") {
+    try {
+      var today = Utilities.formatDate(new Date(), "Asia/Baghdad", "yyyy/MM/dd");
+      var logSS = SpreadsheetApp.openById(TEMPLATE_ID);
+      var logSh = logSS.getSheetByName("logs");
+      var addedToday=0, editedToday=0, exportedToday=0;
+      var lastOps = [];
+      if (logSh) {
+        var logData = logSh.getDataRange().getValues();
+        for (var li = logData.length-1; li >= 1; li--) {
+          var lrow = logData[li];
+          var ldate = (lrow[0]||"").toString();
+          var lop   = (lrow[2]||"").toString();
+          var lid   = (lrow[3]||"").toString();
+          var lname = (lrow[4]||"").toString();
+          if (lastOps.length < 7) lastOps.push({date:ldate,op:lop,id:lid,name:lname,user:(lrow[1]||"").toString()});
+          if (ldate.indexOf(today) === 0) {
+            if (lop.indexOf("إضافة") !== -1) addedToday++;
+            else if (lop.indexOf("تعديل") !== -1) editedToday++;
+            else if (lop.indexOf("تصدير") !== -1) exportedToday++;
+          }
+        }
+      }
+
+      var mainSh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+      var mainData = mainSh.getDataRange().getValues();
+      var now2 = new Date();
+
+      var COL_NAME2  = 2;
+      var COL_ID2    = 0;
+      var COL_TYPE2  = 14;
+      var COL_START  = 52;
+      var COL_EXT1S  = 135; var COL_EXT1E = 136;
+      var COL_EXT2S  = 140; var COL_EXT2E = 141;
+      var COL_EXC1S  = 145; var COL_EXC1E = 146;
+      var COL_EXC2S  = 150; var COL_EXC2E = 151;
+
+      var COL_G1=mainData[0].indexOf("رقم الامر الجامعي بالتخرج");
+      var COL_G2=mainData[0].indexOf("تاريخ الامر الجامعي بالتخرج");
+      var COL_D1=mainData[0].indexOf("رقم الامر الإداري بتشكيل لجنة المناقشة");
+      var COL_D2=mainData[0].indexOf("تاريخ الامر الإداري بتشكيل لجنة المناقشة");
+      var COL_D3=mainData[0].indexOf("رقم محضر تشكيل لجنة المناقشة");
+      var COL_D4=mainData[0].indexOf("تاريخ محضر تشكيل لجنة المناقشة");
+
+      var expired=[], expiring30=[], expiring90=[], noStart=[];
+
+      function parseDate(v){
+        if(!v) return null;
+        if(v instanceof Date) return isNaN(v.getTime())?null:v;
+        var d=new Date(v.toString());
+        return isNaN(d.getTime())?null:d;
+      }
+      function diffDays(a,b){ return Math.floor((b-a)/(1000*60*60*24)); }
+      function addDays(d,n){ var r=new Date(d); r.setDate(r.getDate()+n); return r; }
+
+      for (var mi = 1; mi < mainData.length; mi++) {
+        var row = mainData[mi];
+        var mname = (row[COL_NAME2]||"").toString().trim();
+        if(!mname) continue;
+
+        function gv(idx){ return idx>=0?(row[idx]||"").toString().trim():""; }
+        if(gv(COL_G1)||gv(COL_G2)||gv(COL_D1)||gv(COL_D2)||gv(COL_D3)||gv(COL_D4)) continue;
+
+        var mid  = (row[COL_ID2]||"").toString().trim();
+        var mtype= (row[COL_TYPE2]||"").toString().trim().toLowerCase();
+        var startDate = parseDate(row[COL_START]);
+
+        if(!startDate){
+          noStart.push({name:mname,id:mid});
+          continue;
+        }
+
+        var baseDays = 730;
+        if(mtype.indexOf("دكتور")!==-1) baseDays = 1460;
+        else if(mtype.indexOf("دبلوم")!==-1) baseDays = 365;
+
+        var extDays = 0;
+        var pairs = [[COL_EXT1S,COL_EXT1E],[COL_EXT2S,COL_EXT2E],[COL_EXC1S,COL_EXC1E],[COL_EXC2S,COL_EXC2E]];
+        for(var pi=0;pi<pairs.length;pi++){
+          var ds=parseDate(row[pairs[pi][0]]);
+          var de=parseDate(row[pairs[pi][1]]);
+          if(ds && de && de>ds) extDays += diffDays(ds,de);
+        }
+
+        var endDate = addDays(startDate, baseDays + extDays);
+        var daysLeft = diffDays(now2, endDate);
+        var entry = {name:mname, id:mid, days:daysLeft, endDate:Utilities.formatDate(endDate,"Asia/Baghdad","yyyy/MM/dd")};
+
+        if(daysLeft < 0) expired.push(entry);
+        else if(daysLeft <= 30) expiring30.push(entry);
+        else if(daysLeft <= 90) expiring90.push(entry);
+      }
+
+      return json({
+        dashboard: {
+          today: {added:addedToday, edited:editedToday, exported:exportedToday},
+          lastOps: lastOps,
+          alerts: {expired:expired.length, expiring30:expiring30.length, expiring90:expiring90.length, noStart:noStart.length},
+          expiredList:    expired,
+          expiring30List: expiring30,
+          expiring90List: expiring90,
+          noStartList:    noStart
+        }
+      });
+    } catch(exD) { return json({dashboard:null, error:exD.toString()}); }
+  }
+
+  if (action === "getLogs") {
+    try {
+      var ss2 = SpreadsheetApp.openById(TEMPLATE_ID);
+      var ls = ss2.getSheetByName("logs");
+      if (!ls) return json({ logs: [] });
+      var ad = ls.getDataRange().getValues();
+      return json({ logs: ad.slice(1).reverse().slice(0, 300) });
+    } catch(ex2) { return json({ logs: [] }); }
+  }
+
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+  const data = sh.getDataRange().getValues();
+  const headers = data[0];
+  const idIndex = headers.indexOf("رقم الطالب");
+  let max = 0;
+  for (let i = 1; i < data.length; i++) {
+    const v = data[i][idIndex];
+    if (v && v.toString().startsWith("urbp-")) {
+      const n = parseInt(v.replace("urbp-", ""));
+      if (!isNaN(n) && n > max) max = n;
+    }
+  }
+  try {
+    var archShN = SpreadsheetApp.openById(SHEET_ID).getSheetByName("archive");
+    if (archShN) {
+      var archDataN = archShN.getDataRange().getValues();
+      var archHdrsN = archDataN[0];
+      var archIdN = archHdrsN.indexOf("رقم الطالب");
+      if (archIdN >= 0) {
+        for (var aN = 1; aN < archDataN.length; aN++) {
+          var avN = archDataN[aN][archIdN];
+          if (avN && avN.toString().startsWith("urbp-")) {
+            var anN = parseInt(avN.toString().replace("urbp-", ""));
+            if (!isNaN(anN) && anN > max) max = anN;
+          }
+        }
+      }
+    }
+  } catch(exN) {}
+  return json({ nextId: "urbp-" + (max + 1) });
+}
+
+// 🛡️ دالة تعقيم الخلايا لحظر هجمات Formula/CSV Injection
+function sanitizeSpreadsheetRow(row) {
+  if (!row || !Array.isArray(row)) return row;
+  return row.map(function(cell) {
+    if (cell === null || cell === undefined) return "";
+    var str = cell.toString().trim();
+    if (str.indexOf("=") === 0 || str.indexOf("+") === 0 || str.indexOf("-") === 0 || str.indexOf("@") === 0) {
+      return "'" + str; // إلحاق اقتباس مفرد لتعطيل المعادلة
+    }
+    return cell;
+  });
+}
+
+function doPost(e) {
+  const action  = e.parameter.action;
+  const payload = JSON.parse(e.parameter.payload || "{}");
+  if (action === "login") {
+    const result = handleLogin(payload);
+    if (result.success) writeLog(payload.username||"", "تسجيل دخول", "", "", "دخول ناجح");
+    return json(result);
+  }
+  const token = e.parameter.token || payload.token || "";
+  if (!isValidToken(token)) return json({ error: "غير مصرح — انتهت الجلسة أو يرجى تسجيل الدخول" });
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  const data = sh.getDataRange().getValues();
+  const idIndex   = headers.indexOf("رقم الطالب");
+  const nameIndex = headers.indexOf("الاسم الرباعي واللقب");
+  
+  if (action === "add") {
+    const lock = LockService.getScriptLock();
+    let hasLock = false;
+    try {
+      lock.waitLock(15000); // الانتظار لمدة 15 ثانية كحد أقصى للحصول على القفل
+      hasLock = true;
+      const safeRow = [];
+      for (let i = 0; i < headers.length; i++) safeRow[i] = payload.row[i] || "";
+      const sanitized = sanitizeSpreadsheetRow(safeRow);
+      sh.appendRow(sanitized);
+      writeLog(getUserFromToken(token), "إضافة طالب", sanitized[idIndex]||"", sanitized[nameIndex]||"", "طالب جديد");
+      return json({ status: "added" });
+    } catch(exAdd) {
+      return json({ error: "تعذر إضافة الطالب: " + exAdd.toString() });
+    } finally {
+      if (hasLock) { try { lock.releaseLock(); } catch(e) {} }
+    }
+  }
+  // ════════════════════════════════════════════════════════════
+  // 🔧 تحويل التواريخ للنص قبل الإرسال للواجهة
+  // يحل مشكلة ظهور: 2001-04-28T07:00:00.000Z
+  // ════════════════════════════════════════════════════════════
+  function serializeRow(row) {
+    if (!row) return row;
+    return row.map(function(cell){
+      if (cell instanceof Date) {
+        if (isNaN(cell.getTime())) return "";
+        return Utilities.formatDate(cell, "Asia/Baghdad", "yyyy/MM/dd");
+      }
+      return cell;
+    });
+  }
+
+  if (action === "search") {
+    const q = clean(payload.query);
+    for (let i = 1; i < data.length; i++) {
+      const id   = clean(data[i][idIndex]);
+      const name = clean(data[i][nameIndex]);
+      if (id === q || name === q)
+        return json({ found: true, rowIndex: i + 1, row: serializeRow(data[i]) });
+    }
+    return json({ found: false });
+  }
+  if (action === "update") {
+    const lock = LockService.getScriptLock();
+    let hasLock = false;
+    try {
+      lock.waitLock(15000);
+      hasLock = true;
+      const sanitized = sanitizeSpreadsheetRow(payload.row);
+      sh.getRange(payload.rowIndex, 1, 1, sanitized.length).setValues([sanitized]);
+      SpreadsheetApp.flush();
+      Utilities.sleep(500);
+      writeLog(getUserFromToken(token), "تعديل بيانات", sanitized[idIndex]||"", sanitized[nameIndex]||"", "تعديل");
+      return json({ status: "updated" });
+    } catch(exUp) {
+      return json({ error: "تعذر تعديل بيانات الطالب: " + exUp.toString() });
+    } finally {
+      if (hasLock) { try { lock.releaseLock(); } catch(e) {} }
+    }
+  }
+  if (action === "getAllStudents") {
+    // المواضع الثابتة حسب ALL_COLUMNS في HTML
+    var COL_ID    = 0;   // رقم الطالب
+    var COL_NAME  = 2;   // الاسم الرباعي واللقب
+    var COL_TYPE  = 14;  // نوع الدراسة
+    var COL_GRAD1 = headers.indexOf("رقم الامر الجامعي بالتخرج");
+    var COL_GRAD2 = headers.indexOf("تاريخ الامر الجامعي بالتخرج");
+    var COL_DISC1 = headers.indexOf("رقم الامر الإداري بتشكيل لجنة المناقشة");
+    var COL_DISC2 = headers.indexOf("تاريخ الامر الإداري بتشكيل لجنة المناقشة");
+    var COL_DISC3 = headers.indexOf("رقم محضر تشكيل لجنة المناقشة");
+    var COL_DISC4 = headers.indexOf("تاريخ محضر تشكيل لجنة المناقشة");
+    var COL_CXL   = headers.indexOf("رقم الامر الجامعي بالترقين الأول");
+    var COL_DELAY = headers.indexOf("رقم الامر الجامعي بالتاجيل الأول");
+    var results = [];
+    for (var i = 1; i < data.length; i++) {
+      var row  = data[i];
+      var name = (row[COL_NAME] || "").toString().trim();
+      var id   = (row[COL_ID]   || "").toString().trim();
+      if (!name) continue;
+      // نوع الدراسة مباشرة من الموضع الثابت
+      var studyType = (row[COL_TYPE] || "").toString().trim() || "غير محدد";
+      // حالة الطالب
+      function g(idx){ return idx>=0 ? (row[idx]||"").toString().trim() : ""; }
+      var isGrad  = g(COL_GRAD1)||g(COL_GRAD2)||g(COL_DISC1)||g(COL_DISC2)||g(COL_DISC3)||g(COL_DISC4);
+      var isCxl   = g(COL_CXL);
+      var isDelay = g(COL_DELAY);
+      var status  = "مستمر";
+      if (isGrad)       status = "متخرج";
+      else if (isCxl)   status = "مرقن";
+      else if (isDelay) status = "مؤجل";
+      results.push({ name:name, id:id, status:status, studyType:studyType, rowIndex:i+1 });
+    }
+    // ترتيب تصاعدي حسب الرقم
+    results.sort(function(a,b){
+      var na=parseInt((a.id||"").replace("urbp-",""))||0;
+      var nb=parseInt((b.id||"").replace("urbp-",""))||0;
+      return na-nb;
+    });
+    return json({ students: results });
+  }
+  if (action === "searchByRow") {
+    var ri = payload.rowIndex;
+    if (!ri || ri < 2 || ri > data.length) return json({ found: false });
+    return json({ found: true, rowIndex: ri, row: serializeRow(data[ri - 1]) });
+  }
+
+  if (action === "getAllStudentsStats") {
+    var typeIdx   = headers.indexOf("نوع الدراسة");
+    var deptIdx   = headers.indexOf("القسم المقبول فيه");
+    var genderIdx = headers.indexOf("الجنس");
+    var yearIdx   = headers.indexOf("سنة القبول");
+
+    var total=0, master=0, doctor=0, diploma=0;
+    var deptMap={}, yearMap={};
+    for (var i=1; i<data.length; i++) {
+      var nm=(data[i][nameIndex]||"").toString().trim();
+      if(!nm) continue;
+      total++;
+      var type2  =(data[i][typeIdx]  ||"").toString().trim();
+      var dept2  =(data[i][deptIdx]  ||"").toString().trim()||"غير محدد";
+      var gender2=(data[i][genderIdx]||"").toString().trim();
+      var yearRaw=(data[i][yearIdx]  ||"").toString().trim();
+      var yearVal = "غير محدد";
+      var allYears = yearRaw.match(/(20[0-9][0-9]|19[0-9][0-9])/g);
+      if (allYears && allYears.length > 0) {
+        allYears.sort(function(a,b){ return parseInt(a)-parseInt(b); });
+        yearVal = allYears[0];
+      } else if (yearRaw.length === 4 && !isNaN(yearRaw)) {
+        yearVal = yearRaw;
+      }
+      var type2Lower = type2.replace(/\s+/g, "");
+      var isDoc2 = type2Lower.indexOf("دكتور") !== -1;
+      var isDip2 = type2Lower.indexOf("دبلوم") !== -1 && !isDoc2;
+      if(isDoc2) doctor++; else if(isDip2) diploma++; else master++;
+      // 🔧 إضافة عدّادات منفصلة للدبلوم: pm = دبلوم ذكر، pf = دبلوم أنثى
+      if(!deptMap[dept2]) deptMap[dept2]={dept:dept2,mm:0,mf:0,dm:0,df:0,pm:0,pf:0};
+      var isMale2=(gender2==="ذكر");  // gender2 موحّد مسبقاً
+      if(isDoc2)      { if(isMale2) deptMap[dept2].dm++; else deptMap[dept2].df++; }
+      else if(isDip2) { if(isMale2) deptMap[dept2].pm++; else deptMap[dept2].pf++; }
+      else            { if(isMale2) deptMap[dept2].mm++; else deptMap[dept2].mf++; }
+      if(!yearMap[yearVal]) yearMap[yearVal]={year:yearVal,master:0,doctor:0,diploma:0};
+      if(isDoc2) yearMap[yearVal].doctor++;
+      else if(isDip2) yearMap[yearVal].diploma++;
+      else yearMap[yearVal].master++;
+    }
+    var depts2=Object.values(deptMap).sort(function(a,b){
+      var ta=(a.mm||0)+(a.mf||0)+(a.dm||0)+(a.df||0)+(a.pm||0)+(a.pf||0);
+      var tb=(b.mm||0)+(b.mf||0)+(b.dm||0)+(b.df||0)+(b.pm||0)+(b.pf||0);
+      return tb-ta;
+    });
+    var years2=Object.values(yearMap).sort(function(a,b){
+      if(a.year==="غير محدد") return 1;
+      if(b.year==="غير محدد") return -1;
+      return parseInt(a.year)-parseInt(b.year);
+    });
+    // إحصائيات الحالة
+    var g1=headers.indexOf("رقم الامر الجامعي بالتخرج");
+    var g2=headers.indexOf("تاريخ الامر الجامعي بالتخرج");
+    var g3=headers.indexOf("رقم الامر الإداري بتشكيل لجنة المناقشة");
+    var g4=headers.indexOf("تاريخ الامر الإداري بتشكيل لجنة المناقشة");
+    var g5=headers.indexOf("رقم محضر تشكيل لجنة المناقشة");
+    var g6=headers.indexOf("تاريخ محضر تشكيل لجنة المناقشة");
+    var c1=headers.indexOf("رقم الامر الجامعي بالترقين الأول");
+    var d1=headers.indexOf("رقم الامر الجامعي بالتاجيل الأول");
+    var statusCount={grad:0,active:0,cxl:0,delay:0};
+    for(var si=1;si<data.length;si++){
+      var sname=(data[si][nameIndex]||"").toString().trim();
+      if(!sname) continue;
+      function sv(idx){return idx>=0?(data[si][idx]||"").toString().trim():"";}
+      if(sv(g1)||sv(g2)||sv(g3)||sv(g4)||sv(g5)||sv(g6)) statusCount.grad++;
+      else if(sv(c1)) statusCount.cxl++;
+      else if(sv(d1)) statusCount.delay++;
+      else statusCount.active++;
+    }
+    // قناة القبول + نوع القبول + اكتمال البيانات
+    var channelIdx2=6, admTypeIdx2=13;
+    var channelMap={}, admTypeMap={};
+    for(var ci=1;ci<data.length;ci++){
+      var cnm=(data[ci][nameIndex]||"").toString().trim();
+      if(!cnm) continue;
+      var ch=(data[ci][channelIdx2]||"").toString().trim()||"غير محدد";
+      var at=(data[ci][admTypeIdx2]||"").toString().trim()||"غير محدد";
+      var tp2=(data[ci][typeIdx]||"").toString().trim().replace(/ /g,"");
+      var isDoc3=tp2.indexOf("دكتور")!==-1;
+      var isDip3=tp2.indexOf("دبلوم")!==-1&&!isDoc3;
+      if(!channelMap[ch]) channelMap[ch]={label:ch,master:0,doctor:0,diploma:0};
+      if(isDoc3) channelMap[ch].doctor++; else if(isDip3) channelMap[ch].diploma++; else channelMap[ch].master++;
+      if(!admTypeMap[at]) admTypeMap[at]={label:at,master:0,doctor:0,diploma:0};
+      if(isDoc3) admTypeMap[at].doctor++; else if(isDip3) admTypeMap[at].diploma++; else admTypeMap[at].master++;
+    }
+    var channels=Object.values(channelMap).map(function(r){r.total=r.master+r.doctor+r.diploma;return r;}).sort(function(a,b){return b.total-a.total;});
+    var admTypes=Object.values(admTypeMap).map(function(r){r.total=r.master+r.doctor+r.diploma;return r;}).sort(function(a,b){return b.total-a.total;});
+    var colCount=data[0]?data[0].length:0;
+    var students2=[];
+    for(var si2=1;si2<data.length;si2++){
+      var sn2=(data[si2][nameIndex]||"").toString().trim();
+      if(!sn2) continue;
+      var sid2=(data[si2][idIndex]||"").toString().trim();
+      var missing=0;
+      for(var col2=0;col2<colCount;col2++){
+        if(!(data[si2][col2]||"").toString().trim()) missing++;
+      }
+      students2.push({id:sid2,name:sn2,missing:missing});
+    }
+    students2.sort(function(a,b){return b.missing-a.missing;});
+    return json({stats:{total:total,master:master,doctor:doctor,diploma:diploma,depts:depts2,years:years2,statusCount:statusCount,channels:channels,admTypes:admTypes,students:students2,colCount:colCount}});
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // 📚 إحصائيات الإشراف والمناقشة مجمّعة حسب سنة القبول
+  // ════════════════════════════════════════════════════════════════
+  if (action === "getSupervisionByYear") {
+    var H = headers;
+    var COL_YEAR     = H.indexOf("سنة القبول");
+    var COL_NAME     = H.indexOf("الاسم الرباعي واللقب");
+    var COL_ID       = H.indexOf("رقم الطالب");
+    var COL_TYPE     = H.indexOf("نوع الدراسة");
+    var COL_DEPT     = H.indexOf("القسم المقبول فيه");
+    var COL_TITLE_AR = H.indexOf("عنوان الرسالة باللغة العربية");
+    var COL_TITLE_EN = H.indexOf("عنوان الرسالة باللغة الإنكليزية");
+
+    var COL_SUP1_TITLE = H.indexOf("اللقب العلمي للمشرف1");
+    var COL_SUP1_NAME  = H.indexOf("اسم المشرف الأول");
+    var COL_SUP2_TITLE = H.indexOf("اللقب العلمي للمشرف2");
+    var COL_SUP2_NAME  = H.indexOf("اسم المشرف الثاني");
+
+    // أعضاء لجنة المناقشة (1-7)
+    var committeeCols = [];
+    for (var ci = 1; ci <= 7; ci++) {
+      var tIdx = H.indexOf("اللقب العلمي لجنة" + ci);
+      var nIdx = H.indexOf("اسم عضو لجنة المناقشة" + ci);
+      if (tIdx >= 0 && nIdx >= 0) {
+        committeeCols.push({ titleIdx: tIdx, nameIdx: nIdx });
+      }
+    }
+
+    function val(row, idx) {
+      if (idx < 0) return "";
+      return (row[idx] || "").toString().trim();
+    }
+    function joinTitle(row, ti, ni) {
+      var t = val(row, ti), n = val(row, ni);
+      if (!n) return "";
+      return (t ? t + " " : "") + n;
+    }
+
+    var byYear = {};
+    var totalRecords = 0;
+    var EMPTY_LABEL = "لم يتم إدخال أي معلومات";
+
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var name = val(row, COL_NAME);
+      if (!name) continue;
+
+      var year = val(row, COL_YEAR) || "غير محدد";
+      var sup1 = joinTitle(row, COL_SUP1_TITLE, COL_SUP1_NAME);
+      var sup2 = joinTitle(row, COL_SUP2_TITLE, COL_SUP2_NAME);
+      var supervisors = [];
+      if (sup1) supervisors.push(sup1);
+      if (sup2) supervisors.push(sup2);
+
+      var committee = [];
+      for (var cj = 0; cj < committeeCols.length; cj++) {
+        var memberFull = joinTitle(row, committeeCols[cj].titleIdx, committeeCols[cj].nameIdx);
+        if (memberFull) committee.push(memberFull);
+      }
+
+      var titleAr = val(row, COL_TITLE_AR);
+      var titleEn = val(row, COL_TITLE_EN);
+
+      // 🆕 نعرض كل الطلاب — حتى لو كانت بياناتهم فارغة
+      // تمييز ما هو فارغ بعلم منفصل لكل قسم
+      var hasAnySupData = supervisors.length > 0 || committee.length > 0 || titleAr || titleEn;
+
+      if (!byYear[year]) byYear[year] = { year: year, records: [] };
+      byYear[year].records.push({
+        id: val(row, COL_ID),
+        name: name,
+        type: val(row, COL_TYPE),
+        dept: val(row, COL_DEPT),
+        titleAr: titleAr,
+        titleEn: titleEn,
+        supervisors: supervisors,
+        committee: committee,
+        hasAnySupData: hasAnySupData,
+        emptyTitle: !titleAr && !titleEn,
+        emptySupervisors: supervisors.length === 0,
+        emptyCommittee: committee.length === 0
+      });
+      totalRecords++;
+    }
+
+    // ترتيب السنوات تنازلياً (الأحدث أولاً)
+    var yearsArr = Object.values(byYear).sort(function(a, b) {
+      if (a.year === "غير محدد") return 1;
+      if (b.year === "غير محدد") return -1;
+      return b.year.toString().localeCompare(a.year.toString());
+    });
+
+    // ترتيب السجلات داخل كل سنة حسب اسم الطالب
+    yearsArr.forEach(function(y) {
+      y.records.sort(function(a, b) { return a.name.localeCompare(b.name, "ar"); });
+      y.count = y.records.length;
+    });
+
+    return json({
+      total: totalRecords,
+      yearsCount: yearsArr.length,
+      years: yearsArr
+    });
+  }
+
+  if (action === "delete") {
+    if (getRoleFromToken(token) !== "admin") return json({ error: "ليس لديك صلاحية الارشفة" });
+    if (!payload.rowIndex) return json({ error: "rowIndex مطلوب" });
+    const lock = LockService.getScriptLock();
+    let hasLock = false;
+    try {
+      lock.waitLock(15000);
+      hasLock = true;
+      var delRow = sh.getRange(payload.rowIndex, 1, 1, sh.getLastColumn()).getValues()[0];
+      var delId   = delRow[idIndex]   || "";
+      var delName = delRow[nameIndex] || "";
+      var archiveSheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName("archive");
+      if (!archiveSheet) {
+        archiveSheet = SpreadsheetApp.openById(SHEET_ID).insertSheet("archive");
+        var archHdrs = headers.slice();
+        archHdrs.push("تاريخ الأرشفة");
+        archHdrs.push("أرشف بواسطة");
+        archiveSheet.appendRow(archHdrs);
+      }
+      var archiveRow = delRow.slice();
+      var nowStr = Utilities.formatDate(new Date(), "Asia/Baghdad", "yyyy/MM/dd HH:mm:ss");
+      archiveRow.push(nowStr);
+      archiveRow.push(getUserFromToken(token));
+      archiveSheet.appendRow(archiveRow);
+      sh.deleteRow(payload.rowIndex);
+      SpreadsheetApp.flush();
+      return json({ status: "archived", id: delId, name: delName });
+    } catch(ex) { return json({ error: ex.toString() }); }
+    finally {
+      if (hasLock) { try { lock.releaseLock(); } catch(e) {} }
+    }
+  }
+
+  if (action === "suggest") {
+    const q = clean(payload.query);
+    const results = [];
+    for (let i = 1; i < data.length; i++) {
+      const name = (data[i][nameIndex] || "").toString().trim();
+      if (name && clean(name).indexOf(q) !== -1) results.push(name);
+    }
+    return json({ suggestions: results.slice(0, 10) });
+  }
+  return json({ status: "unknown" });
+}
+
+function exportStudentPDF(e, pagesToExport) {
+  pagesToExport = pagesToExport || PAGES_CV;
+  try {
+    const studentId = e.parameter.studentId;
+    if (!studentId) return json({ error: "رقم الطالب مطلوب" });
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+    const data = sh.getDataRange().getValues();
+    const headers = data[0];
+    const idIndex = headers.indexOf("رقم الطالب");
+    let studentRow = null;
+    for (let i = 1; i < data.length; i++) {
+      if (clean(data[i][idIndex]) === clean(studentId)) { studentRow = data[i]; break; }
+    }
+    if (!studentRow) return json({ error: "لم يتم العثور على الطالب" });
+    const colMap = {};
+    for (let i = 0; i < studentRow.length; i++) {
+      let val = studentRow[i];
+      if (val instanceof Date) val = Utilities.formatDate(val, "Asia/Baghdad", "yyyy/MM/dd");
+      colMap[i + 1] = (val !== undefined && val !== null && val !== "") ? val.toString() : "---";
+    }
+    // 🔧 استخدام دالة النسخ الذكية مع Retry + Fallback لمعالجة Empty response
+    const copyMetadata = copyTemplateWithRetry(
+      TEMPLATE_ID,
+      "cv_temp_" + studentId,
+      4
+    );
+    const copyId = copyMetadata.id;
+    try {
+      Utilities.sleep(2000);
+      const ss = SpreadsheetApp.openById(copyId);
+      for (const pageName of pagesToExport) {
+        const sheetName = (pageName === "page4") ? PAGE4_SHEET_NAME :
+                          (pageName === "page5") ? PAGE5_SHEET_NAME :
+                          (pageName === "page6") ? PAGE6_SHEET_NAME :
+                          (pageName === "page7") ? PAGE7_SHEET_NAME :
+                          (pageName === "page9") ? PAGE9_SHEET_NAME : pageName;
+        const sheet = ss.getSheetByName(sheetName);
+        if (!sheet) continue;
+
+        // ===== page4 =====
+        if (pageName === "page4") {
+          const formulaCells4 = [
+            [2,7], [5,6], [5,8], [5,13],
+            [7,3], [7,6], [7,8],
+            [9,4],
+            [12,3], [12,5], [12,7], [12,9], [12,11],
+            [30,1], [30,3], [30,6], [30,8],
+            [31,1], [31,3], [31,6], [31,8],
+            [32,1], [32,3], [32,6], [32,8],
+            [33,1], [33,3], [33,6], [33,8],
+            [34,1], [34,3], [34,6], [34,8],
+            [35,1], [35,3], [35,6], [35,8],
+            [36,1], [36,3], [36,6], [36,8],
+          ];
+          for (let i = 0; i < formulaCells4.length; i++) {
+            sheet.getRange(formulaCells4[i][0], formulaCells4[i][1]).setFormula("").setValue("");
+          }
+          SpreadsheetApp.flush();
+          sheet.getRange(3, 4).setValue(studentId);
+          const p4map = [
+            [2,7,15],[5,6,183],[5,8,184],[5,13,15],
+            [7,3,3],[7,6,10],[7,8,9],
+            [9,4,117],
+            [12,3,180],[12,5,181],[12,7,179],[12,9,182],[12,11,9],
+            [30,1,190],[30,6,188],[30,8,189],
+            [31,1,196],[31,6,194],[31,8,195],
+            [32,1,202],[32,6,200],[32,8,201],
+            [33,1,208],[33,6,206],[33,8,207],
+            [34,1,214],[34,6,212],[34,8,213],
+            [35,1,220],[35,6,218],[35,8,219],
+            [36,1,226],[36,6,224],[36,8,225],
+          ];
+          for (let i = 0; i < p4map.length; i++) {
+            sheet.getRange(p4map[i][0], p4map[i][1]).setValue(colMap[p4map[i][2]] || "---");
+          }
+          const combined4 = [
+            {row:30,col1:185,col2:186},{row:31,col1:191,col2:192},
+            {row:32,col1:197,col2:198},{row:33,col1:203,col2:204},
+            {row:34,col1:209,col2:210},{row:35,col1:215,col2:216},
+            {row:36,col1:221,col2:222},
+          ];
+          for (let m = 0; m < combined4.length; m++) {
+            const c = combined4[m];
+            const laqab = (colMap[c.col1]||"").replace("---","").trim();
+            const name  = (colMap[c.col2]||"").replace("---","").trim();
+            sheet.getRange(c.row, 3).setValue((laqab+" "+name).trim()||"---");
+          }
+          SpreadsheetApp.flush();
+          continue;
+        }
+
+        // ===== page5 — خريطة مختلفة تماماً =====
+        // رقم الطالب في D2 | أعضاء اللجنة في صفوف 37-42
+        if (pageName === "page5") {
+          // مسح المعادلات المكسورة
+          const formulaCells5 = [
+            [4,3],   // C4  ← عنوان الرسالة
+            [8,4],   // D8  ← اسم الطالب
+            [10,4],  // D10 ← التخصص العام
+            [10,13], // M10 ← التخصص الدقيق
+            [12,4],  // D12 ← المشرف الأول (مدمجة)
+            [12,13], // M12 ← المشرف الثاني (مدمجة)
+            [14,4],  // D14 ← الجامعة
+            [14,11], // K14 ← الكلية
+            [16,4],  // D16 ← القسم
+            [37,1],[37,3],[37,7],[37,11],
+            [38,1],[38,3],[38,7],[38,11],
+            [39,1],[39,3],[39,7],[39,11],
+            [40,1],[40,3],[40,7],[40,11],
+            [41,1],[41,3],[41,7],[41,11],
+            [42,1],[42,3],[42,7],[42,11],
+          ];
+          for (let i = 0; i < formulaCells5.length; i++) {
+            sheet.getRange(formulaCells5[i][0], formulaCells5[i][1]).setFormula("").setValue("");
+          }
+          SpreadsheetApp.flush();
+
+          // رقم الطالب في D2
+          sheet.getRange(2, 4).setValue(studentId);
+
+          // الخلايا البسيطة
+          const p5map = [
+            [4,  3,  117],  // C4  ← عنوان الرسالة
+            [8,  4,  3  ],  // D8  ← اسم الطالب
+            [10, 4,  46 ],  // D10 ← التخصص العام
+            [10, 13, 47 ],  // M10 ← التخصص الدقيق
+            [14, 4,  8  ],  // D14 ← الجامعة
+            [14, 11, 9  ],  // K14 ← الكلية
+            [16, 4,  10 ],  // D16 ← القسم
+            [37, 1,  190],  [37, 7,  188],  [37, 11, 189],
+            [38, 1,  196],  [38, 7,  194],  [38, 11, 195],
+            [39, 1,  202],  [39, 7,  200],  [39, 11, 201],
+            [40, 1,  208],  [40, 7,  206],  [40, 11, 207],
+            [41, 1,  214],  [41, 7,  212],  [41, 11, 213],
+            [42, 1,  220],  [42, 7,  218],  [42, 11, 219],
+          ];
+          for (let i = 0; i < p5map.length; i++) {
+            sheet.getRange(p5map[i][0], p5map[i][1]).setValue(colMap[p5map[i][2]] || "---");
+          }
+
+          // المشرف الأول: لقب + اسم مدمجان في D12
+          const sup1 = ((colMap[119]||"")+" "+(colMap[120]||"")).replace("---","").trim();
+          sheet.getRange(12, 4).setValue(sup1 || "---");
+
+          // المشرف الثاني: لقب + اسم مدمجان في M12
+          const sup2 = ((colMap[126]||"")+" "+(colMap[127]||"")).replace("---","").trim();
+          sheet.getRange(12, 13).setValue(sup2 || "---");
+
+          // نوع الدراسة في M8
+          sheet.getRange(8, 13).setValue(colMap[15] || "---");
+
+          // تاريخ المناقشة في M16
+          sheet.getRange(16, 13).setValue(colMap[179] || "---");
+
+          // الخلايا المدمجة C37:C42 = لقب + اسم لأعضاء اللجنة
+          const combined5 = [
+            {row:37,col1:185,col2:186},{row:38,col1:191,col2:192},
+            {row:39,col1:197,col2:198},{row:40,col1:203,col2:204},
+            {row:41,col1:209,col2:210},{row:42,col1:215,col2:216},
+          ];
+          for (let m = 0; m < combined5.length; m++) {
+            const c = combined5[m];
+            const laqab = (colMap[c.col1]||"").replace("---","").trim();
+            const name  = (colMap[c.col2]||"").replace("---","").trim();
+            sheet.getRange(c.row, 3).setValue((laqab+" "+name).trim()||"---");
+          }
+
+          // حذف الصفوف بعد 42 لمنع الصفحة الثانية
+          try {
+            const maxRows5 = sheet.getMaxRows();
+            if (maxRows5 > 42) sheet.deleteRows(43, maxRows5 - 42);
+          } catch(ex) {}
+
+          // تحديد نطاق الطباعة بدقة لصفحة واحدة فقط
+          try {
+            sheet.setHiddenGridlines(true);
+            SpreadsheetApp.flush();
+          } catch(ex) {}
+          SpreadsheetApp.flush();
+          continue;
+        }
+
+        // ===== page6: محضر مناقشة طالب دكتوراه =====
+        // رقم الطالب في D3 | أعضاء اللجنة في صفوف 34-40
+        if (pageName === "page6") {
+          const formulaCells6 = [
+            [2,7],[5,6],[5,8],[5,13],
+            [7,3],[7,6],[7,8],
+            [9,4],
+            [12,3],[12,5],[12,7],[12,9],[12,11],
+            [34,1],[34,3],[34,6],[34,8],
+            [35,1],[35,3],[35,6],[35,8],
+            [36,1],[36,3],[36,6],[36,8],
+            [37,1],[37,3],[37,6],[37,8],
+            [38,1],[38,3],[38,6],[38,8],
+            [39,1],[39,3],[39,6],[39,8],
+            [40,1],[40,3],[40,6],[40,8],
+          ];
+          for (let i = 0; i < formulaCells6.length; i++) {
+            sheet.getRange(formulaCells6[i][0], formulaCells6[i][1]).setFormula("").setValue("");
+          }
+          SpreadsheetApp.flush();
+
+          sheet.getRange(3, 4).setValue(studentId);
+
+          const p6map = [
+            [2,7,15],[5,6,183],[5,8,184],[5,13,15],
+            [7,3,3],[7,6,10],[7,8,9],
+            [9,4,117],
+            [12,3,180],[12,5,181],[12,7,179],[12,9,182],[12,11,9],
+            [34,1,190],[34,6,188],[34,8,189],
+            [35,1,196],[35,6,194],[35,8,195],
+            [36,1,202],[36,6,200],[36,8,201],
+            [37,1,208],[37,6,206],[37,8,207],
+            [38,1,214],[38,6,212],[38,8,213],
+            [39,1,220],[39,6,218],[39,8,219],
+            [40,1,226],[40,6,224],[40,8,225],
+          ];
+          for (let i = 0; i < p6map.length; i++) {
+            sheet.getRange(p6map[i][0], p6map[i][1]).setValue(colMap[p6map[i][2]] || "---");
+          }
+
+          // الخلايا المدمجة C34:C40 = لقب + اسم
+          const combined6 = [
+            {row:34,col1:185,col2:186},{row:35,col1:191,col2:192},
+            {row:36,col1:197,col2:198},{row:37,col1:203,col2:204},
+            {row:38,col1:209,col2:210},{row:39,col1:215,col2:216},
+            {row:40,col1:221,col2:222},
+          ];
+          for (let m = 0; m < combined6.length; m++) {
+            const c = combined6[m];
+            const laqab = (colMap[c.col1]||"").replace("---","").trim();
+            const name  = (colMap[c.col2]||"").replace("---","").trim();
+            sheet.getRange(c.row, 3).setValue((laqab+" "+name).trim()||"---");
+          }
+
+          SpreadsheetApp.flush();
+          continue;
+        }
+
+        // ===== page7: الاستمارة الجديدة للدكتوراه =====
+        // رقم الطالب في D2 | أعضاء اللجنة في صفوف 38-44
+        if (pageName === "page7") {
+          const formulaCells7 = [
+            [4,3],
+            [8,4],[8,13],
+            [10,4],[10,13],
+            [12,4],[12,13],
+            [14,4],[14,11],
+            [16,4],[16,13],
+            [38,1],[38,3],[38,7],[38,11],
+            [39,1],[39,3],[39,7],[39,11],
+            [40,1],[40,3],[40,7],[40,11],
+            [41,1],[41,3],[41,7],[41,11],
+            [42,1],[42,3],[42,7],[42,11],
+            [43,1],[43,3],[43,7],[43,11],
+            [44,1],[44,3],[44,7],[44,11],
+          ];
+          for (let i = 0; i < formulaCells7.length; i++) {
+            sheet.getRange(formulaCells7[i][0], formulaCells7[i][1]).setFormula("").setValue("");
+          }
+          SpreadsheetApp.flush();
+
+          sheet.getRange(2, 4).setValue(studentId);
+
+          const p7map = [
+            [4,  3,  117],
+            [8,  4,  3  ],
+            [10, 4,  46 ],[10,13,47],
+            [14, 4,  8  ],[14,11,9],
+            [16, 4,  10 ],
+            [38,1,190],[38,7,188],[38,11,189],
+            [39,1,196],[39,7,194],[39,11,195],
+            [40,1,202],[40,7,200],[40,11,201],
+            [41,1,208],[41,7,206],[41,11,207],
+            [42,1,214],[42,7,212],[42,11,213],
+            [43,1,220],[43,7,218],[43,11,219],
+            [44,1,226],[44,7,224],[44,11,225],
+          ];
+          for (let i = 0; i < p7map.length; i++) {
+            sheet.getRange(p7map[i][0], p7map[i][1]).setValue(colMap[p7map[i][2]] || "---");
+          }
+
+          // المشرف الأول D12 = لقب + اسم
+          const sup1 = ((colMap[119]||"")+" "+(colMap[120]||"")).replace("---","").trim();
+          sheet.getRange(12, 4).setValue(sup1 || "---");
+
+          // المشرف الثاني M12 = لقب + اسم
+          const sup2 = ((colMap[126]||"")+" "+(colMap[127]||"")).replace("---","").trim();
+          sheet.getRange(12, 13).setValue(sup2 || "---");
+
+          // نوع الدراسة M8
+          sheet.getRange(8, 13).setValue(colMap[15] || "---");
+
+          // تاريخ المناقشة M16
+          sheet.getRange(16, 13).setValue(colMap[179] || "---");
+
+          // الخلايا المدمجة C38:C44 = لقب + اسم
+          const combined7 = [
+            {row:38,col1:185,col2:186},{row:39,col1:191,col2:192},
+            {row:40,col1:197,col2:198},{row:41,col1:203,col2:204},
+            {row:42,col1:209,col2:210},{row:43,col1:215,col2:216},
+            {row:44,col1:221,col2:222},
+          ];
+          for (let m = 0; m < combined7.length; m++) {
+            const c = combined7[m];
+            const laqab = (colMap[c.col1]||"").replace("---","").trim();
+            const name  = (colMap[c.col2]||"").replace("---","").trim();
+            sheet.getRange(c.row, 3).setValue((laqab+" "+name).trim()||"---");
+          }
+
+          // حذف الصفوف الزائدة بعد 44
+          try {
+            const maxR7 = sheet.getMaxRows();
+            if (maxR7 > 44) sheet.deleteRows(45, maxR7 - 44);
+          } catch(ex) {}
+
+          SpreadsheetApp.flush();
+          continue;
+        }
+        // ===== page9: استمارة ملاحظات لجنة المناقشة =====
+        if (pageName === "page9") {
+          sheet.getRange(3, 1).setValue(colMap[117] || "---");
+          const p9m4n = (colMap[120]||"").replace("---","").trim();
+          const p9m4l = (colMap[119]||"").replace("---","").trim();
+          const p9m4  = p9m4l ? p9m4l+" "+p9m4n : p9m4n;
+          const p9m1n = (colMap[186]||"").replace("---","").trim();
+          const p9m1l = (colMap[185]||"").replace("---","").trim();
+          const p9m1  = p9m1l ? p9m1l+" "+p9m1n : p9m1n;
+          const p9m2n = (colMap[192]||"").replace("---","").trim();
+          const p9m2l = (colMap[191]||"").replace("---","").trim();
+          const p9m2  = p9m2l ? p9m2l+" "+p9m2n : p9m2n;
+          const p9m3n = (colMap[198]||"").replace("---","").trim();
+          const p9m3l = (colMap[197]||"").replace("---","").trim();
+          const p9m3  = p9m3l ? p9m3l+" "+p9m3n : p9m3n;
+          sheet.getRange(51, 1).setValue(p9m4 || "---");
+          sheet.getRange(51, 3).setValue(p9m2 || "---");
+          sheet.getRange(51, 6).setValue(p9m3 || "---");
+          sheet.getRange(51, 8).setValue(p9m1 || "---");
+          SpreadsheetApp.flush();
+          continue;
+        }
+
+        const pageMap = PAGE_MAPS[pageName];
+        if (!pageMap) continue;
+        if (pageName === "page1") {
+          sheet.getRange(8, 9).setValue(studentId);
+          sheet.getRange(13, 3).setValue(colMap[8]  || "---");
+          sheet.getRange(13, 7).setValue(colMap[9]  || "---");
+          sheet.getRange(30, 5).setValue(colMap[12] || "---");
+        }
+        for (const key in pageMap) {
+          const parts = key.split(",");
+          const row = parseInt(parts[0]);
+          const col = parseInt(parts[1]);
+          const value = colMap[pageMap[key]] || "---";
+          sheet.getRange(row, col).setValue(value);
+        }
+        if (pageName === "page3") {
+          const m1 = ((colMap[119]||"")+" "+(colMap[120]||"")).trim();
+          const m2 = ((colMap[126]||"")+" "+(colMap[127]||"")).trim();
+          sheet.getRange(7, 4).setValue(m1 || "---");
+          sheet.getRange(11, 4).setValue(m2 || "---");
+          const q1 = ((colMap[156]||"")+" "+(colMap[157]||"")).trim();
+          const q2 = ((colMap[163]||"")+" "+(colMap[164]||"")).trim();
+          const q3 = ((colMap[170]||"")+" "+(colMap[171]||"")).trim();
+          sheet.getRange(16, 2).setValue(q1 || "---");
+          sheet.getRange(16, 5).setValue(q2 || "---");
+          sheet.getRange(16, 8).setValue(q3 || "---");
+          const memberRows  = [26,27,28,29,30,31,32];
+          const laqabCols   = [185,191,197,203,209,215,221];
+          const nameCols    = [186,192,198,204,210,216,222];
+          for (let m = 0; m < 7; m++) {
+            const full = ((colMap[laqabCols[m]]||"")+" "+(colMap[nameCols[m]]||"")).trim();
+            sheet.getRange(memberRows[m], 1).setValue(full || "---");
+          }
+        }
+        SpreadsheetApp.flush();
+      }
+
+      // احفظ gid للشيتات التي تحتاج scale قبل الحذف
+      let scaledSheetGid = null;
+      const needsScale = (pagesToExport.length === 1 && (pagesToExport[0] === "page5" || pagesToExport[0] === "page7" || pagesToExport[0] === "page9"));
+      if (needsScale) {
+        const scaleSheetName = pagesToExport[0] === "page5" ? PAGE5_SHEET_NAME : pagesToExport[0] === "page9" ? PAGE9_SHEET_NAME : PAGE7_SHEET_NAME;
+        const scaleSheet = ss.getSheetByName(scaleSheetName);
+        if (scaleSheet) scaledSheetGid = scaleSheet.getSheetId();
+      }
+
+      Utilities.sleep(1000);
+      const allSheets = ss.getSheets();
+      const sheetsToDelete = [];
+      for (let i = 0; i < allSheets.length; i++) {
+        const sName = allSheets[i].getName();
+        const isNeeded = pagesToExport.some(function(p) {
+          if (p === "page4") return sName === PAGE4_SHEET_NAME;
+          if (p === "page5") return sName === PAGE5_SHEET_NAME;
+          if (p === "page6") return sName === PAGE6_SHEET_NAME;
+          if (p === "page7") return sName === PAGE7_SHEET_NAME;
+          if (p === "page9") return sName === PAGE9_SHEET_NAME;
+          return sName === p;
+        });
+        if (!isNeeded) sheetsToDelete.push(allSheets[i]);
+      }
+      for (let i = sheetsToDelete.length - 1; i >= 0; i--) {
+        try { ss.deleteSheet(sheetsToDelete[i]); } catch(ex) {}
+      }
+      SpreadsheetApp.flush();
+      Utilities.sleep(500);
+
+      const pdfBlob = (needsScale && scaledSheetGid !== null)
+        ? fetchAsPDF_scaled(copyId, scaledSheetGid)
+        : fetchAsPDF(copyId);
+      const pdfBase64 = Utilities.base64Encode(pdfBlob.getBytes());
+      return json({ pdfBase64: pdfBase64 });
+
+    } finally {
+      Drive.Files.remove(copyId);
+    }
+  } catch (err) {
+    return json({ error: err.toString() });
+  }
+}
+
+function fetchAsPDF(fileId) {
+  const url = "https://docs.google.com/spreadsheets/d/" + fileId +
+    "/export?exportFormat=pdf&format=pdf&size=A4&portrait=true" +
+    "&fitw=true&fith=true&sheetnames=false&printtitle=false" +
+    "&pagenumbers=false&gridlines=false&fzr=false" +
+    "&top_margin=0.75&bottom_margin=0.75" +
+    "&left_margin=0.50&right_margin=0.50";
+  const res = UrlFetchApp.fetch(url, {
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() !== 200) throw new Error("فشل PDF: " + res.getResponseCode());
+  return res.getBlob();
+}
+
+// دالة تصدير مع scale=4 لضمان صفحة واحدة — تستخدم لـ page5 و page7
+function fetchAsPDF_scaled(fileId, sheetGid) {
+  const url = "https://docs.google.com/spreadsheets/d/" + fileId +
+    "/export?exportFormat=pdf&format=pdf&size=A4&portrait=true" +
+    "&fitw=true&fith=true&sheetnames=false&printtitle=false" +
+    "&pagenumbers=false&gridlines=false&fzr=false" +
+    "&top_margin=0.20&bottom_margin=0.20" +
+    "&left_margin=0.20&right_margin=0.20" +
+    "&scale=4" +
+    "&gid=" + sheetGid;
+  const res = UrlFetchApp.fetch(url, {
+    headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() !== 200) throw new Error("فشل PDF: " + res.getResponseCode());
+  return res.getBlob();
+}
+
+function clean(str) {
+  if (!str) return "";
+  return str.toString().trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/[\u064B-\u065F]/g, '')
+    .toLowerCase();
+}
+
+function json(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ============================================================
+// Logs
+// ============================================================
+const LOG_SHEET_NAME = "logs";
+
+function writeLog(username, operation, studentId, studentName, details) {
+  try {
+    var ss = SpreadsheetApp.openById(TEMPLATE_ID);
+    var logSheet = ss.getSheetByName(LOG_SHEET_NAME);
+    if (!logSheet) return;
+    var now = Utilities.formatDate(new Date(), "Asia/Baghdad", "yyyy/MM/dd HH:mm:ss");
+    logSheet.appendRow([now, username||"", operation||"", studentId||"", studentName||"", details||""]);
+  } catch(ex) {}
+}
+
+// ════════════════════════════════════════════════════════════════
+// 🔧 دالة النسخ الذكية — تعالج خطأ "Empty response" تلقائياً
+// ════════════════════════════════════════════════════════════════
+function copyTemplateWithRetry(templateId, newTitle, maxRetries) {
+  maxRetries = maxRetries || 4;
+  var lastError = null;
+
+  for (var attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      Logger.log("🔄 محاولة النسخ #" + attempt + "...");
+
+      // الطريقة الأساسية: Drive Advanced Service
+      var copyMetadata = Drive.Files.copy(
+        {
+          title: newTitle,
+          mimeType: "application/vnd.google-apps.spreadsheet"
+        },
+        templateId,
+        { supportsAllDrives: true }
+      );
+
+      if (copyMetadata && copyMetadata.id) {
+        Logger.log("✅ نجحت العملية في المحاولة #" + attempt);
+        return copyMetadata;
+      }
+
+      throw new Error("Empty response - لا يوجد ID");
+
+    } catch (err) {
+      lastError = err;
+      Logger.log("⚠️ فشلت المحاولة #" + attempt + ": " + err.toString());
+
+      if (attempt < maxRetries) {
+        // Exponential Backoff: 2s, 4s, 8s
+        var waitTime = Math.pow(2, attempt) * 1000;
+        Logger.log("⏳ انتظار " + (waitTime / 1000) + "ث قبل المحاولة التالية...");
+        Utilities.sleep(waitTime);
+      }
+    }
+  }
+
+  // الخطة البديلة: استخدام DriveApp.makeCopy
+  Logger.log("🔁 الانتقال للطريقة البديلة (DriveApp.makeCopy)...");
+  try {
+    var sourceFile = DriveApp.getFileById(templateId);
+    var copyFile = sourceFile.makeCopy(newTitle);
+    var copyId = copyFile.getId();
+
+    Utilities.sleep(1500);
+    var mimeType = DriveApp.getFileById(copyId).getMimeType();
+    
+    if (mimeType !== "application/vnd.google-apps.spreadsheet") {
+      Logger.log("🔄 تحويل الملف إلى Google Sheets...");
+      Drive.Files.update(
+        { mimeType: "application/vnd.google-apps.spreadsheet" },
+        copyId,
+        null,
+        { convert: true }
+      );
+    }
+
+    Logger.log("✅ نجحت العملية بالطريقة البديلة");
+    return { id: copyId };
+
+  } catch (fallbackErr) {
+    Logger.log("❌ فشلت الطريقة البديلة أيضاً: " + fallbackErr.toString());
+    throw new Error(
+      "فشل نسخ القالب بعد " + maxRetries + " محاولات. " +
+      "آخر خطأ: " + (lastError ? lastError.toString() : fallbackErr.toString())
+    );
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// 🔍 دالة تشخيص حالة Template — شغّلها يدوياً عند ظهور خطأ
+// ════════════════════════════════════════════════════════════════
+function diagnoseTemplate() {
+  try {
+    Logger.log("═══════════════════════════════════════");
+    Logger.log("🔍 تشخيص ملف Template");
+    Logger.log("═══════════════════════════════════════");
+
+    var file = DriveApp.getFileById(TEMPLATE_ID);
+    Logger.log("✅ اسم الملف: " + file.getName());
+    Logger.log("✅ النوع: " + file.getMimeType());
+    Logger.log("✅ الحجم: " + file.getSize() + " bytes");
+    Logger.log("✅ آخر تعديل: " + file.getLastUpdated());
+    Logger.log("✅ المالك: " + file.getOwner().getEmail());
+
+    if (file.isTrashed()) {
+      Logger.log("⚠️⚠️⚠️ الملف في سلة المهملات!");
+      return;
+    }
+
+    Logger.log("───────────────────────────────────────");
+    Logger.log("🧪 اختبار النسخ...");
+    var testCopy = copyTemplateWithRetry(TEMPLATE_ID, "diagnose_test_" + Date.now());
+    Logger.log("✅ نجح النسخ — ID: " + testCopy.id);
+
+    Utilities.sleep(1000);
+    Drive.Files.remove(testCopy.id);
+    Logger.log("🗑️ تم حذف النسخة التجريبية");
+    Logger.log("═══════════════════════════════════════");
+    Logger.log("✅✅✅ كل شيء يعمل بشكل صحيح");
+
+  } catch (err) {
+    Logger.log("❌ خطأ: " + err.toString());
+    Logger.log("📋 Stack: " + err.stack);
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// 🧹 دالة تنظيف الملفات المؤقتة العالقة (cv_temp_*)
+// ════════════════════════════════════════════════════════════════
+function cleanupTempFiles() {
+  try {
+    var files = DriveApp.searchFiles('title contains "cv_temp_" and trashed = false');
+    var count = 0;
+    while (files.hasNext()) {
+      var f = files.next();
+      try {
+        Drive.Files.remove(f.getId());
+        count++;
+      } catch(ex) {
+        try { f.setTrashed(true); count++; } catch(e2) {}
+      }
+    }
+    Logger.log("🧹 تم تنظيف " + count + " ملف مؤقت");
+  } catch (err) {
+    Logger.log("❌ خطأ في التنظيف: " + err.toString());
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// 🔍 دالة تشخيص بيانات الطلاب — تكشف السجلات الناقصة أو المشبوهة
+// ════════════════════════════════════════════════════════════════
+function diagnoseStudentsData() {
+  try {
+    var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+    var data = sh.getDataRange().getValues();
+    var headers = data[0];
+
+    var nameIdx   = headers.indexOf("الاسم الرباعي واللقب");
+    var idIdx     = headers.indexOf("رقم الطالب");
+    var typeIdx   = headers.indexOf("نوع الدراسة");
+    var deptIdx   = headers.indexOf("القسم المقبول فيه");
+    var genderIdx = headers.indexOf("الجنس");
+
+    Logger.log("═══════════════════════════════════════");
+    Logger.log("🔍 تشخيص بيانات الطلاب");
+    Logger.log("═══════════════════════════════════════");
+    Logger.log("📋 العمود (الاسم) = " + nameIdx);
+    Logger.log("📋 العمود (نوع الدراسة) = " + typeIdx);
+    Logger.log("📋 العمود (القسم) = " + deptIdx);
+    Logger.log("📋 العمود (الجنس) = " + genderIdx);
+    Logger.log("───────────────────────────────────────");
+
+    var issues = [];
+    var typeValues = {};
+    var deptValues = {};
+    var genderValues = {};
+    var totalValid = 0;
+
+    for (var i = 1; i < data.length; i++) {
+      var name = (data[i][nameIdx] || "").toString().trim();
+      if (!name) continue;
+      totalValid++;
+
+      var id     = (data[i][idIdx]     || "").toString().trim();
+      var type   = (data[i][typeIdx]   || "").toString().trim();
+      var dept   = (data[i][deptIdx]   || "").toString().trim();
+      var gender = (data[i][genderIdx] || "").toString().trim();
+
+      // إحصاء القيم الفريدة
+      typeValues[type || "(فارغ)"]     = (typeValues[type || "(فارغ)"]     || 0) + 1;
+      deptValues[dept || "(فارغ)"]     = (deptValues[dept || "(فارغ)"]     || 0) + 1;
+      genderValues[gender || "(فارغ)"] = (genderValues[gender || "(فارغ)"] || 0) + 1;
+
+      // كشف المشاكل
+      var problems = [];
+      if (!type)   problems.push("نوع الدراسة فارغ");
+      if (!dept)   problems.push("القسم فارغ");
+      if (!gender) problems.push("الجنس فارغ");
+      if (gender && gender !== "ذكر" && gender !== "أنثى") {
+        problems.push("الجنس غير معياري: '" + gender + "'");
+      }
+
+      if (problems.length > 0) {
+        issues.push({
+          row: i + 1,
+          id: id,
+          name: name,
+          type: type,
+          dept: dept,
+          gender: gender,
+          problems: problems.join(" | ")
+        });
+      }
+    }
+
+    Logger.log("📊 إجمالي السجلات الصالحة: " + totalValid);
+    Logger.log("───────────────────────────────────────");
+
+    Logger.log("📋 القيم الفريدة لـ (نوع الدراسة):");
+    for (var k in typeValues) Logger.log("   • '" + k + "' → " + typeValues[k] + " طالب");
+
+    Logger.log("───────────────────────────────────────");
+    Logger.log("📋 القيم الفريدة لـ (الجنس):");
+    for (var k in genderValues) Logger.log("   • '" + k + "' → " + genderValues[k] + " طالب");
+
+    Logger.log("───────────────────────────────────────");
+    Logger.log("📋 القيم الفريدة لـ (القسم):");
+    for (var k in deptValues) Logger.log("   • '" + k + "' → " + deptValues[k] + " طالب");
+
+    Logger.log("───────────────────────────────────────");
+    if (issues.length === 0) {
+      Logger.log("✅ لا توجد مشاكل في البيانات");
+    } else {
+      Logger.log("⚠️ تم العثور على " + issues.length + " طالب فيه مشاكل:");
+      Logger.log("───────────────────────────────────────");
+      for (var j = 0; j < issues.length; j++) {
+        var iss = issues[j];
+        Logger.log("🔴 الصف #" + iss.row + " (ID: " + iss.id + ")");
+        Logger.log("   👤 الاسم: " + iss.name);
+        Logger.log("   📚 النوع: '" + iss.type + "'");
+        Logger.log("   🏛️ القسم: '" + iss.dept + "'");
+        Logger.log("   ⚧ الجنس: '" + iss.gender + "'");
+        Logger.log("   ⚠️ المشكلة: " + iss.problems);
+        Logger.log("");
+      }
+    }
+
+    Logger.log("═══════════════════════════════════════");
+    Logger.log("✅ انتهى التشخيص");
+
+  } catch (err) {
+    Logger.log("❌ خطأ: " + err.toString());
+    Logger.log("📋 Stack: " + err.stack);
+  }
+}
+
+
+
+
+// ════════════════════════════════════════════════════════════════
+// 🔧 دالة إصلاح التواريخ المخزّنة بصيغة ISO
+// تحوّل: '2001-04-28T07:00:00.000Z' → '2001/04/28'
+// تطبق فقط على الأعمدة التي اسمها يبدأ بـ "تاريخ"
+// ════════════════════════════════════════════════════════════════
+function fixISODates() {
+  try {
+    var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+    var data = sh.getDataRange().getValues();
+    var headers = data[0];
+
+    // تحديد أعمدة التواريخ تلقائياً (التي تبدأ بـ "تاريخ")
+    var dateColumns = [];
+    for (var c = 0; c < headers.length; c++) {
+      var h = (headers[c] || "").toString().trim();
+      if (h.indexOf("تاريخ") === 0) {
+        dateColumns.push({ index: c, name: h });
+      }
+    }
+
+    Logger.log("═══════════════════════════════════════");
+    Logger.log("🔧 إصلاح التواريخ المخزّنة بصيغة ISO");
+    Logger.log("═══════════════════════════════════════");
+    Logger.log("📋 أعمدة التواريخ المكتشفة: " + dateColumns.length);
+    dateColumns.forEach(function(dc){ Logger.log("   • " + dc.name + " (عمود " + (dc.index + 1) + ")"); });
+    Logger.log("───────────────────────────────────────");
+
+    // نمط ISO: 2001-04-28T07:00:00.000Z
+    var ISO_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+    var fixed = 0;
+    var changes = [];
+
+    for (var i = 1; i < data.length; i++) {
+      for (var j = 0; j < dateColumns.length; j++) {
+        var col = dateColumns[j].index;
+        var val = data[i][col];
+
+        if (val && typeof val === "string" && ISO_PATTERN.test(val)) {
+          // استخراج اليوم/الشهر/السنة من ISO
+          var dt = new Date(val);
+          if (!isNaN(dt.getTime())) {
+            var formatted = Utilities.formatDate(dt, "Asia/Baghdad", "yyyy/MM/dd");
+            sh.getRange(i + 1, col + 1).setValue(formatted);
+            fixed++;
+            if (changes.length < 50) {
+              changes.push("الصف " + (i + 1) + " | " + dateColumns[j].name + " | '" + val + "' → '" + formatted + "'");
+            }
+          }
+        }
+      }
+    }
+
+    SpreadsheetApp.flush();
+
+    Logger.log("✅ تم إصلاح " + fixed + " قيمة تاريخ");
+    if (changes.length > 0) {
+      Logger.log("───────────────────────────────────────");
+      Logger.log("📋 عينة من التغييرات:");
+      for (var k = 0; k < changes.length; k++) Logger.log("   " + changes[k]);
+      if (fixed > 50) Logger.log("   ... و " + (fixed - 50) + " تغيير آخر");
+    }
+    Logger.log("═══════════════════════════════════════");
+
+  } catch (err) {
+    Logger.log("❌ خطأ: " + err.toString());
+    Logger.log("📋 Stack: " + err.stack);
+  }
+}

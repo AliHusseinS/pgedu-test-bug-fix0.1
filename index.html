@@ -1118,6 +1118,7 @@ function xlogin() {
       if (d.success) {
         // حفظ الـ Token في الجلسة — لا كلمة سر في المتصفح
         setSession(d.token, d.username, d.role || 'editor');
+        fetchNextId();
         var overlay = document.getElementById('xlo');
         overlay.style.transition = 'opacity .5s';
         overlay.style.opacity = '0';
@@ -1150,6 +1151,7 @@ document.addEventListener('keydown', function(ev) {
 (function() {
   if (getToken()) {
     document.getElementById('xlo').style.display = 'none';
+    fetchNextId();
     window._userRole = sessionStorage.getItem('xlRole') || 'editor';
     var savedUser = sessionStorage.getItem('xlUser') || '';
     showUserBadge(savedUser, window._userRole);
@@ -1380,11 +1382,16 @@ function post(action, payload){
     .catch(err => { console.error("API Error:", err); throw err; });
 }
 
-// تحميل الرقم التسلسلي
-fetch(API_URL)
-  .then(r => r.json())
-  .then(d => { if(d.nextId) document.getElementById("رقم الطالب").value = d.nextId; })
-  .catch(err => console.warn("تعذر تحميل الرقم التسلسلي:", err));
+// تحميل الرقم التسلسلي بطريقة آمنة باستخدام الـ token
+function fetchNextId() {
+  const token = getToken();
+  if(!token) return;
+  fetch(API_URL + "?token=" + encodeURIComponent(token))
+    .then(r => r.json())
+    .then(d => { if(d.nextId) document.getElementById("رقم الطالب").value = d.nextId; })
+    .catch(err => console.warn("تعذر تحميل الرقم التسلسلي:", err));
+}
+fetchNextId();
 
 // ============================================================
 // إضافة طالب
@@ -1471,10 +1478,7 @@ function addStudent(){
         // مسح النموذج كاملاً وجلب رقم جديد من السيرفر
         ALL_COLUMNS.forEach(c => { const el = document.getElementById(c); if(el) el.value = ""; });
         document.getElementById("searchBox").value = "";
-        fetch(API_URL)
-          .then(r => r.json())
-          .then(nd => { if(nd.nextId) document.getElementById("رقم الطالب").value = nd.nextId; })
-          .catch(() => {});
+        fetchNextId();
       }
     })
     .catch(err => { if(err.message !== "session_expired") showToast("❌ تعذر الاتصال بالخادم", "error"); })
